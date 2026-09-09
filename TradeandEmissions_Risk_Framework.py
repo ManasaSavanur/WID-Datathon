@@ -1,17 +1,17 @@
 from pathlib import Path
 from typing import Tuple
-import os
 
 import numpy as np
 import pandas as pd
 
 
 BASE_DIR = Path(__file__).resolve().parent
-
 TRADE_FILE_CANDIDATES = [
 	"Trade_Matrix_2023.csv",
-	"Trade Matrix_2023.csv",
 	"Trade_Matrix_2023_ms.csv",
+	"Trade Matrix_2023.csv",
+	"Trade Matrix_Full.csv",
+	"Trade Matrix_All.csv",
 ]
 EMISSIONS_FILE_CANDIDATES = [
 	"Emissions Intensities_2023.csv",
@@ -27,26 +27,28 @@ OUT_OVERLAP = BASE_DIR / "trade_emissions_overlap_2023.csv"
 OUT_ACTIONS = BASE_DIR / "trade_emissions_priority_actions_2023.csv"
 
 
-def _norm_name(name: str) -> str:
+def normalize_filename(name: str) -> str:
 	return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
 def resolve_data_file(base_dir: Path, candidates: list[str], label: str) -> Path:
-	# 1) Exact match first.
-	for c in candidates:
-		p = base_dir / c
-		if p.exists():
-			return p
+	# Exact name match first.
+	for candidate in candidates:
+		path = base_dir / candidate
+		if path.exists():
+			return path
 
-	# 2) Relaxed matching: ignore spaces, underscores, hyphens, and case.
-	targets = {_norm_name(c) for c in candidates}
-	for p in base_dir.iterdir():
-		if p.is_file() and _norm_name(p.name) in targets:
-			return p
+	# Relaxed match: ignore spacing/case/underscores.
+	normalized_targets = {normalize_filename(c) for c in candidates}
+	for path in base_dir.iterdir():
+		if path.is_file() and normalize_filename(path.name) in normalized_targets:
+			return path
 
-	available = sorted([p.name for p in base_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"])
+	available_csv = sorted(
+		[path.name for path in base_dir.iterdir() if path.is_file() and path.suffix.lower() == ".csv"]
+	)
 	raise FileNotFoundError(
-		f"Missing {label}. Tried: {candidates}. Available CSV files: {available}"
+		f"Missing {label}. Tried: {candidates}. Available CSV files: {available_csv}"
 	)
 
 
@@ -480,10 +482,4 @@ def run_streamlit() -> None:
 
 
 if __name__ == "__main__":
-	# Default to Streamlit-friendly behavior for cloud/app execution.
-	# Set RUN_MODE=cli to force plain Python CLI execution.
-	run_mode = os.getenv("RUN_MODE", "streamlit").strip().lower()
-	if run_mode == "cli":
-		run_cli()
-	else:
-		run_streamlit()
+	run_cli()
