@@ -1,17 +1,53 @@
 from pathlib import Path
 from typing import Tuple
+import os
 
 import numpy as np
 import pandas as pd
 
 
 BASE_DIR = Path(__file__).resolve().parent
-TRADE_FILE = BASE_DIR / "Trade_Matrix_2023.csv"
-EMISSIONS_FILE = BASE_DIR / "Emissions Intensities_2023.csv"
-VULN_FILE = BASE_DIR / "country_vulnerability_concentration_index.csv"
+
+TRADE_FILE_CANDIDATES = [
+	"Trade_Matrix_2023.csv",
+	"Trade Matrix_2023.csv",
+	"Trade_Matrix_2023_ms.csv",
+]
+EMISSIONS_FILE_CANDIDATES = [
+	"Emissions Intensities_2023.csv",
+	"Emissions_Intensities_2023.csv",
+	"emissions_intensities_2023.csv",
+]
+VULN_FILE_CANDIDATES = [
+	"country_vulnerability_concentration_index.csv",
+	"Country_Vulnerability_Concentration_Index.csv",
+]
 
 OUT_OVERLAP = BASE_DIR / "trade_emissions_overlap_2023.csv"
 OUT_ACTIONS = BASE_DIR / "trade_emissions_priority_actions_2023.csv"
+
+
+def _norm_name(name: str) -> str:
+	return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def resolve_data_file(base_dir: Path, candidates: list[str], label: str) -> Path:
+	# 1) Exact match first.
+	for c in candidates:
+		p = base_dir / c
+		if p.exists():
+			return p
+
+	# 2) Relaxed matching: ignore spaces, underscores, hyphens, and case.
+	targets = {_norm_name(c) for c in candidates}
+	for p in base_dir.iterdir():
+		if p.is_file() and _norm_name(p.name) in targets:
+			return p
+
+	available = sorted([p.name for p in base_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"])
+	raise FileNotFoundError(
+		f"Missing {label}. Tried: {candidates}. Available CSV files: {available}"
+	)
 
 
 def normalize_m49(series: pd.Series) -> pd.Series:
@@ -221,18 +257,18 @@ def assign_priority_action(row: pd.Series) -> str:
 
 
 def build_overlap_framework() -> pd.DataFrame:
-	vulnerability = load_vulnerability(VULN_FILE)
-	emissions = load_emissions(EMISSIONS_FILE)
-	trade = load_trade(TRADE_FILE)
+	vulnerability = load_vulnerability(resolve_data_file(BASE_DIR, VULN_FILE_CANDIDATES, "vulnerability file"))
+	emissions = load_emissions(resolve_data_file(BASE_DIR, EMISSIONS_FILE_CANDIDATES, "emissions file"))
+	trade = load_trade(resolve_data_file(BASE_DIR, TRADE_FILE_CANDIDATES, "trade matrix file"))
 
 	emissions_metrics, _ = emissions_exposure_metrics(trade, emissions)
 	return _finalize_overlap(vulnerability, emissions_metrics)
 
 
 def build_overlap_framework_with_details() -> Tuple[pd.DataFrame, pd.DataFrame]:
-	vulnerability = load_vulnerability(VULN_FILE)
-	emissions = load_emissions(EMISSIONS_FILE)
-	trade = load_trade(TRADE_FILE)
+	vulnerability = load_vulnerability(resolve_data_file(BASE_DIR, VULN_FILE_CANDIDATES, "vulnerability file"))
+	emissions = load_emissions(resolve_data_file(BASE_DIR, EMISSIONS_FILE_CANDIDATES, "emissions file"))
+	trade = load_trade(resolve_data_file(BASE_DIR, TRADE_FILE_CANDIDATES, "trade matrix file"))
 	emissions_metrics, merged_links = emissions_exposure_metrics(trade, emissions)
 	df = _finalize_overlap(vulnerability, emissions_metrics)
 	return df, merged_links
@@ -444,4 +480,10 @@ def run_streamlit() -> None:
 
 
 if __name__ == "__main__":
-	run_cli()
+	# Default to Streamlit-friendly behavior for cloud/app execution.
+	# Set RUN_MODE=cli to force plain Python CLI execution.
+	run_mode = os.getenv("RUN_MODE", "streamlit").strip().lower()
+	if run_mode == "cli":
+		run_cli()
+	else:
+		run_streamlit()
