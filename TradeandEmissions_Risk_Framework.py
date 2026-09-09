@@ -7,6 +7,8 @@ import pandas as pd
 
 BASE_DIR = Path(__file__).resolve().parent
 TRADE_FILE_CANDIDATES = [
+	"Trade_Matrix_2023_app.csv.gz",
+	"Trade_Matrix_2023_app.csv",
 	"Trade_Matrix_2023.csv",
 	"Trade_Matrix_2023_ms.csv",
 	"Trade Matrix_2023.csv",
@@ -45,7 +47,11 @@ def resolve_data_file(base_dir: Path, candidates: list[str], label: str) -> Path
 			return path
 
 	available_csv = sorted(
-		[path.name for path in base_dir.iterdir() if path.is_file() and path.suffix.lower() == ".csv"]
+		[
+			path.name
+			for path in base_dir.iterdir()
+			if path.is_file() and path.name.lower().endswith((".csv", ".csv.gz"))
+		]
 	)
 	raise FileNotFoundError(
 		f"Missing {label}. Tried: {candidates}. Available CSV files: {available_csv}"
