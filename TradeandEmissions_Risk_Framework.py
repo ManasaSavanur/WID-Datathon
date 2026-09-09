@@ -468,8 +468,13 @@ def run_streamlit() -> None:
 
 			shock = sub.copy()
 			mask = shock["partner_country"].fillna("Unknown").astype(str).eq(shock_partner)
-			shock.loc[mask, "import_value"] = shock.loc[mask, "import_value"] * (1.0 - loss_factor)
-			shock.loc[mask, "weighted_emissions"] = shock.loc[mask, "weighted_emissions"] * (1.0 - loss_factor)
+
+			# Use float-safe vectorized assignment to avoid dtype upcast errors on some pandas builds.
+			shock_import = pd.to_numeric(shock["import_value"], errors="coerce").fillna(0.0).astype(float)
+			shock_emissions = pd.to_numeric(shock["weighted_emissions"], errors="coerce").fillna(0.0).astype(float)
+			multiplier = np.where(mask.to_numpy(), 1.0 - loss_factor, 1.0)
+			shock["import_value"] = shock_import.to_numpy() * multiplier
+			shock["weighted_emissions"] = shock_emissions.to_numpy() * multiplier
 
 			post_import = shock["import_value"].sum()
 			post_emissions = shock["weighted_emissions"].sum()
