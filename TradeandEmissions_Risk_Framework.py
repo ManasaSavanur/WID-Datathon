@@ -471,14 +471,13 @@ def run_streamlit() -> None:
 	)
 
 	st.subheader("Priority Ranking")
-	priority_df = df[["country", "overlap_index", "overlap_tier", "vulnerability_index", "emissions_exposure_index", "concentration_index", "priority_action"]].copy()
+	priority_df = df[["country", "overlap_index", "vulnerability_index", "emissions_exposure_index", "concentration_index", "priority_action"]].copy()
 	priority_df.insert(0, "Priority Rank", np.arange(1, len(priority_df) + 1))
 	priority_df.insert(1, "Flag", priority_df["country"].apply(get_country_flag_url))
 	priority_df = priority_df.rename(columns={
 		"country": "Country",
 		"Priority Rank": "Rank",
 		"overlap_index": "Overlap Index",
-		"overlap_tier": "Overlap Tier",
 		"vulnerability_index": "Vulnerability Index",
 		"emissions_exposure_index": "Emissions Exposure Index",
 		"concentration_index": "Concentration Index",
@@ -486,7 +485,7 @@ def run_streamlit() -> None:
 	})
 	priority_df[["Overlap Index", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index"]] = priority_df[["Overlap Index", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index"]].round(3)
 	priority_df["Flag"] = priority_df["Country"].apply(lambda c: get_country_flag_url(c) or "")
-	priority_df = priority_df[["Rank", "Flag", "Country", "Overlap Index", "Overlap Tier", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index", "Priority Action"]]
+	priority_df = priority_df[["Rank", "Flag", "Country", "Overlap Index", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index", "Priority Action"]]
 	st.dataframe(
 		priority_df,
 		use_container_width=True,
@@ -503,7 +502,21 @@ def run_streamlit() -> None:
 		"overlap_tier": "Overlap Tier",
 	})
 	scatter_df[["Vulnerability Index", "Emissions Exposure Index"]] = scatter_df[["Vulnerability Index", "Emissions Exposure Index"]].round(3)
-	st.scatter_chart(scatter_df, x="Vulnerability Index", y="Emissions Exposure Index", color="Overlap Tier")
+	try:
+		import plotly.express as px
+		fig = px.scatter(
+			scatter_df,
+			x="Vulnerability Index",
+			y="Emissions Exposure Index",
+			color="Overlap Tier",
+			hover_name="Country",
+			title="Country overlap map",
+			labels={"Vulnerability Index": "Vulnerability Index", "Emissions Exposure Index": "Emissions Exposure Index"},
+		)
+		fig.update_traces(hovertemplate="<b>%{hovertext}</b><br>Vulnerability Index: %{x:.3f}<br>Emissions Exposure Index: %{y:.3f}<extra></extra>")
+		st.plotly_chart(fig, use_container_width=True)
+	except Exception:
+		pass
 
 	st.subheader("Action Playbook")
 	tiers = ["Critical overlap", "High vulnerability", "High emissions", "Moderate/Low"]
@@ -515,15 +528,11 @@ def run_streamlit() -> None:
 				st.write("No countries in this tier.")
 				continue
 			action_text = df[df["overlap_tier"] == tier]["priority_action"].dropna().iloc[0]
-			st.caption(f"Priority action: {action_text}")
+			st.markdown(f"**🚨 Priority action:** {action_text}")
 			tier_df = tier_df.rename(columns={"country": "Country", "overlap_index": "Overlap Index"}).sort_values("Overlap Index", ascending=False).head(10)
 			tier_df["Overlap Index"] = tier_df["Overlap Index"].round(3)
-			left_col, right_col = st.columns([1.6, 1.2])
-			with left_col:
-				st.dataframe(tier_df, use_container_width=True, hide_index=True)
-			with right_col:
-				bar = tier_df.set_index("Country")["Overlap Index"].round(3)
-				st.bar_chart(bar)
+			styled_df = tier_df.style.bar(subset=["Overlap Index"], align="mid", color=["#d65f5f", "#5fba7d"])
+			st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
 	st.download_button(
 		"Download overlap results CSV",
@@ -550,7 +559,7 @@ def run_streamlit() -> None:
 		flag_url = get_country_flag_url(selected_country)
 		flag_col, text_col = st.columns([1, 5])
 		if flag_url:
-			flag_col.image(flag_url, width=80)
+			flag_col.image(flag_url, width=120)
 		text_col.markdown(f"### {selected_country}")
 		text_col.caption(f"Overlap tier: {row['overlap_tier']} | Priority action: {row['priority_action']}")
 
@@ -570,10 +579,10 @@ def run_streamlit() -> None:
 					color_continuous_scale="Reds",
 					title=f"{selected_country} in the global risk context",
 				)
-				fig.update_traces(hovertemplate="<b>%{hovertext}</b><br>Overlap Index: %{z:.3f}<extra></extra>")
+				fig.update_traces(hovertemplate="<b>%{hovertext}</b><br>Country: %{hovertext}<br>Overlap Index: %{z:.3f}<extra></extra>")
 				st.plotly_chart(fig, use_container_width=True)
 		except Exception:
-			st.info("World map view is unavailable in this environment.")
+			pass
 
 		sub["emissions_intensity_filled"] = sub["emissions_intensity"].fillna(sub["emissions_intensity"].median(skipna=True))
 		sub["weighted_emissions"] = sub["import_value"] * sub["emissions_intensity_filled"]
