@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Tuple
 
@@ -301,6 +302,19 @@ def export_outputs(df: pd.DataFrame) -> None:
 	out[["m49", "country", "overlap_tier", "priority_action", "overlap_index"]].to_csv(OUT_ACTIONS, index=False)
 
 
+def normalize_country_name(name: str) -> str:
+	if name is None:
+		return ""
+	n = str(name).strip().lower()
+	n = n.replace("&", " and ")
+	n = n.replace("'", "")
+	n = re.sub(r"[^a-z0-9\s]", " ", n)
+	n = re.sub(r"\s+", " ", n).strip()
+	for token in ["the ", "republic of ", "islamic republic of ", "people's democratic republic of ", "commonwealth of the "]:
+		n = n.replace(token, "")
+	return n.strip()
+
+
 def build_country_flag_lookup() -> dict[str, str]:
 	path = BASE_DIR / "FAOcountryProfile.csv"
 	lookup: dict[str, str] = {}
@@ -309,24 +323,53 @@ def build_country_flag_lookup() -> dict[str, str]:
 	country_df = pd.read_csv(path, low_memory=False)
 	country_df.columns = [str(c).strip() for c in country_df.columns]
 	for _, row in country_df.iterrows():
+		iso3 = str(row.get("ISO3_CODE", "")).strip().upper()
+		if not iso3:
+			continue
 		for col in ["ISO3_CODE", "ISO3_WB_CODE", "SHORT_NAME", "OFFICIAL_FAO_NAME", "UNOFFICIAL1_NAME", "UNOFFICIAL2_NAME", "UNOFFICIAL3_NAME"]:
 			val = row.get(col)
 			if pd.isna(val) or str(val).strip() == "":
 				continue
-			name = str(val).strip()
-			lookup.setdefault(name.lower(), str(row.get("ISO3_CODE", "")).strip().upper())
-			lookup.setdefault(str(row.get("SHORT_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
-			lookup.setdefault(str(row.get("OFFICIAL_FAO_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
-			lookup.setdefault(str(row.get("UNOFFICIAL1_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
-			lookup.setdefault(str(row.get("UNOFFICIAL2_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
-			lookup.setdefault(str(row.get("UNOFFICIAL3_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+			key = normalize_country_name(str(val))
+			if key:
+				lookup[key] = iso3
+		if str(row.get("SHORT_NAME", "")).strip():
+			lookup[normalize_country_name(str(row.get("SHORT_NAME", "")))] = iso3
 	return {k: v for k, v in lookup.items() if v}
 
 
-def get_country_flag_url(country_name: str) -> str | None:
+def get_country_iso3(country_name: str) -> str | None:
 	lookup = build_country_flag_lookup()
-	key = str(country_name or "").strip().lower()
-	iso3 = lookup.get(key)
+	if not country_name:
+		return None
+	key = normalize_country_name(country_name)
+	if key in lookup:
+		return lookup[key]
+	# Common alias fixes for FAO naming mismatches.
+	alias_map = {
+		"cote d ivoire": "CIV",
+		"ivory coast": "CIV",
+		"congo": "COD",
+		"democratic republic of congo": "COD",
+		"united states of america": "USA",
+		"usa": "USA",
+		"united states": "USA",
+		"south korea": "KOR",
+		"north korea": "PRK",
+		"russian federation": "RUS",
+		"viet nam": "VNM",
+		"czech republic": "CZE",
+		"brunei darussalam": "BRN",
+		"eswatini": "SWZ",
+		"cape verde": "CPV",
+		"timor leste": "TLS",
+		"bahamas": "BHS",
+	}
+	return alias_map.get(key)
+
+
+def get_country_flag_url(country_name: str) -> str | None:
+	iso3 = get_country_iso3(country_name)
 	if not iso3:
 		return None
 	return f"https://raw.githubusercontent.com/ManasaSavanur/CountryFlags/master/flags/{iso3.lower()}.png"
@@ -387,7 +430,7 @@ def run_streamlit() -> None:
 
 	st.set_page_config(page_title="Food Trade x Emissions Risk", layout="wide")
 	st.title("Food-Trade Vulnerability and Emissions Overlap")
-	st.caption("Competition prototype: country ranking, overlap diagnosis, and prioritized actions")
+	st.caption("Country ranking, overlap diagnosis, and prioritized actions")
 
 	df, links = build_overlap_framework_with_details()
 	export_outputs(df)
@@ -397,32 +440,64 @@ def run_streamlit() -> None:
 	c2.metric("Critical overlap countries", int((df["overlap_tier"] == "Critical overlap").sum()))
 	c3.metric("Median overlap index", f"{df['overlap_index'].median():.3f}")
 	c4.metric("Avg emissions coverage", f"{df['emissions_data_coverage'].mean():.1%}")
+	st.caption(
+		"Metric definitions: Countries scored = all countries with valid risk scores; Critical overlap = countries above the 75th percentile in both vulnerability and emissions exposure; Median overlap index = central value across countries; Avg emissions coverage = share of import value matched to emissions intensity data."
+	)
 
 	st.subheader("Priority Ranking")
 	priority_df = df[["country", "overlap_index", "overlap_tier", "vulnerability_index", "emissions_exposure_index", "concentration_index", "priority_action"]].copy()
 	priority_df.insert(0, "Priority Rank", np.arange(1, len(priority_df) + 1))
-	priority_df = display_df_with_headers(priority_df)
-	priority_df = priority_df.rename(columns={"Priority Rank": "Rank"})
-	st.dataframe(priority_df, use_container_width=True, hide_index=True)
+	priority_df.insert(1, "Flag", priority_df["country"].apply(get_country_flag_url))
+	priority_df = priority_df.rename(columns={
+		"country": "Country",
+		"Priority Rank": "Rank",
+		"overlap_index": "Overlap Index",
+		"overlap_tier": "Overlap Tier",
+		"vulnerability_index": "Vulnerability Index",
+		"emissions_exposure_index": "Emissions Exposure Index",
+		"concentration_index": "Concentration Index",
+		"priority_action": "Priority Action",
+	})
+	priority_df[["Overlap Index", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index"]] = priority_df[["Overlap Index", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index"]].round(3)
+	priority_df["Flag"] = priority_df["Country"].apply(lambda c: get_country_flag_url(c) or "")
+	priority_df = priority_df[["Rank", "Flag", "Country", "Overlap Index", "Overlap Tier", "Vulnerability Index", "Emissions Exposure Index", "Concentration Index", "Priority Action"]]
+	st.dataframe(
+		priority_df,
+		use_container_width=True,
+		hide_index=True,
+		column_config={"Flag": st.column_config.ImageColumn("Flag", width="small")},
+	)
 
 	st.subheader("Overlap Map")
 	scatter_df = df[["country", "vulnerability_index", "emissions_exposure_index", "overlap_tier"]].copy()
-	st.scatter_chart(scatter_df, x="vulnerability_index", y="emissions_exposure_index", color="overlap_tier")
+	scatter_df = scatter_df.rename(columns={
+		"country": "Country",
+		"vulnerability_index": "Vulnerability Index",
+		"emissions_exposure_index": "Emissions Exposure Index",
+		"overlap_tier": "Overlap Tier",
+	})
+	scatter_df[["Vulnerability Index", "Emissions Exposure Index"]] = scatter_df[["Vulnerability Index", "Emissions Exposure Index"]].round(3)
+	st.scatter_chart(scatter_df, x="Vulnerability Index", y="Emissions Exposure Index", color="Overlap Tier")
 
 	st.subheader("Action Playbook")
 	tiers = ["Critical overlap", "High vulnerability", "High emissions", "Moderate/Low"]
 	tabs = st.tabs(tiers)
 	for tab, tier in zip(tabs, tiers):
 		with tab:
-			s = df[df["overlap_tier"] == tier][["country", "priority_action", "overlap_index"]].head(10).copy()
-			if len(s) == 0:
+			tier_df = df[df["overlap_tier"] == tier][["country", "overlap_index"]].copy()
+			if len(tier_df) == 0:
 				st.write("No countries in this tier.")
-			else:
-				playbook_df = display_df_with_headers(s)
-				st.dataframe(playbook_df, use_container_width=True, hide_index=True)
-				if len(playbook_df) > 0:
-					bar_df = playbook_df.set_index("Country")[["Overlap Index"]].sort_values("Overlap Index", ascending=False)
-					st.bar_chart(bar_df)
+				continue
+			action_text = df[df["overlap_tier"] == tier]["priority_action"].dropna().iloc[0]
+			st.caption(f"Priority action: {action_text}")
+			tier_df = tier_df.rename(columns={"country": "Country", "overlap_index": "Overlap Index"}).sort_values("Overlap Index", ascending=False).head(10)
+			tier_df["Overlap Index"] = tier_df["Overlap Index"].round(3)
+			left_col, right_col = st.columns([1.6, 1.2])
+			with left_col:
+				st.dataframe(tier_df, use_container_width=True, hide_index=True)
+			with right_col:
+				bar = tier_df.set_index("Country")["Overlap Index"].round(3)
+				st.bar_chart(bar)
 
 	st.download_button(
 		"Download overlap results CSV",
@@ -452,6 +527,27 @@ def run_streamlit() -> None:
 			flag_col.image(flag_url, width=80)
 		text_col.markdown(f"### {selected_country}")
 		text_col.caption(f"Overlap tier: {row['overlap_tier']} | Priority action: {row['priority_action']}")
+
+		try:
+			import plotly.express as px
+			map_df = df[["country", "overlap_index"]].copy().dropna().copy()
+			map_df["iso_code"] = map_df["country"].map(get_country_iso3)
+			map_df = map_df.dropna(subset=["iso_code"]).copy()
+			if not map_df.empty:
+				fig = px.choropleth(
+					map_df,
+					locations="iso_code",
+					locationmode="ISO-3",
+					color="overlap_index",
+					hover_name="country",
+					scope="world",
+					color_continuous_scale="Reds",
+					title=f"{selected_country} in the global risk context",
+				)
+				fig.update_traces(hovertemplate="<b>%{hovertext}</b><br>Overlap Index: %{z:.3f}<extra></extra>")
+				st.plotly_chart(fig, use_container_width=True)
+		except Exception:
+			st.info("World map view is unavailable in this environment.")
 
 		sub["emissions_intensity_filled"] = sub["emissions_intensity"].fillna(sub["emissions_intensity"].median(skipna=True))
 		sub["weighted_emissions"] = sub["import_value"] * sub["emissions_intensity_filled"]
@@ -484,7 +580,14 @@ def run_streamlit() -> None:
 		)
 		partner_tbl = partner_tbl.sort_values("Risk Contribution", ascending=False)
 		partner_tbl = partner_tbl[["partner_country", "import_value", "Import Share", "Average Emissions Intensity", "Risk Contribution"]].head(10).copy()
-		partner_tbl = display_df_with_headers(partner_tbl)
+		partner_tbl = partner_tbl.rename(columns={
+			"partner_country": "Partner Country",
+			"import_value": "Import Value",
+			"Import Share": "Import Share",
+			"Average Emissions Intensity": "Average Emissions Intensity",
+			"Risk Contribution": "Risk Contribution",
+		})
+		partner_tbl[["Import Share", "Average Emissions Intensity", "Risk Contribution"]] = partner_tbl[["Import Share", "Average Emissions Intensity", "Risk Contribution"]].round(3)
 
 		item_tbl = (
 			sub.groupby(["item_cpc", "resolved_item_name"], as_index=False)
@@ -503,30 +606,24 @@ def run_streamlit() -> None:
 		)
 		item_tbl = item_tbl.sort_values("Risk Contribution", ascending=False)
 		item_tbl = item_tbl[["resolved_item_name", "import_value", "Import Share", "Average Emissions Intensity", "Risk Contribution"]].head(10).copy()
-		item_tbl = display_df_with_headers(item_tbl)
-
-		partner_chart = partner_tbl.set_index("Partner Country")[["Import Share", "Average Emissions Intensity"]].copy()
-		item_chart = item_tbl.set_index("Food Item")[["Import Share", "Average Emissions Intensity"]].copy()
+		item_tbl = item_tbl.rename(columns={
+			"resolved_item_name": "Food Item",
+			"import_value": "Import Value",
+			"Import Share": "Import Share",
+			"Average Emissions Intensity": "Average Emissions Intensity",
+			"Risk Contribution": "Risk Contribution",
+		})
+		item_tbl[["Import Share", "Average Emissions Intensity", "Risk Contribution"]] = item_tbl[["Import Share", "Average Emissions Intensity", "Risk Contribution"]].round(3)
 
 		partner_col, item_col = st.columns(2)
 		with partner_col:
 			st.markdown("### Top Risky Partner Countries")
 			st.dataframe(partner_tbl, use_container_width=True, hide_index=True)
-			st.bar_chart(partner_chart)
+			st.bar_chart(partner_tbl.set_index("Partner Country")["Import Share"].round(3))
 		with item_col:
 			st.markdown("### Top Risky Food Items")
 			st.dataframe(item_tbl, use_container_width=True, hide_index=True)
-			st.bar_chart(item_chart)
-
-		fig, ax = __import__('matplotlib').pyplot.subplots(figsize=(4, 4))
-		pie_df = item_tbl.head(5).copy()
-		if len(pie_df) > 0:
-			labels = pie_df["Food Item"].astype(str)
-			values = pie_df["Import Share"].astype(float)
-			ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
-			ax.set_title("Top item contribution")
-			st.pyplot(fig)
-			__import__('matplotlib').pyplot.close(fig)
+			st.bar_chart(item_tbl.set_index("Food Item")["Import Share"].round(3))
 
 		st.markdown("### What-If: Supplier Disruption Simulation")
 		partner_options = partner_tbl["Partner Country"].fillna("Unknown").astype(str).tolist()
