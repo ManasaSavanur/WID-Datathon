@@ -323,22 +323,22 @@ def build_country_flag_lookup() -> dict[str, str]:
 	country_df = pd.read_csv(path, low_memory=False)
 	country_df.columns = [str(c).strip() for c in country_df.columns]
 	for _, row in country_df.iterrows():
-		iso3 = str(row.get("ISO3_CODE", "")).strip().upper()
-		if not iso3:
+		iso2 = str(row.get("ISO2_CODE", "")).strip().upper()
+		if not iso2:
 			continue
-		for col in ["ISO3_CODE", "ISO3_WB_CODE", "SHORT_NAME", "OFFICIAL_FAO_NAME", "UNOFFICIAL1_NAME", "UNOFFICIAL2_NAME", "UNOFFICIAL3_NAME"]:
+		for col in ["ISO2_CODE", "ISO2_WB_CODE", "SHORT_NAME", "OFFICIAL_FAO_NAME", "UNOFFICIAL1_NAME", "UNOFFICIAL2_NAME", "UNOFFICIAL3_NAME"]:
 			val = row.get(col)
 			if pd.isna(val) or str(val).strip() == "":
 				continue
 			key = normalize_country_name(str(val))
 			if key:
-				lookup[key] = iso3
+				lookup[key] = iso2
 		if str(row.get("SHORT_NAME", "")).strip():
-			lookup[normalize_country_name(str(row.get("SHORT_NAME", "")))] = iso3
+			lookup[normalize_country_name(str(row.get("SHORT_NAME", "")))] = iso2
 	return {k: v for k, v in lookup.items() if v}
 
 
-def get_country_iso3(country_name: str) -> str | None:
+def get_country_iso2(country_name: str) -> str | None:
 	lookup = build_country_flag_lookup()
 	if not country_name:
 		return None
@@ -347,32 +347,58 @@ def get_country_iso3(country_name: str) -> str | None:
 		return lookup[key]
 	# Common alias fixes for FAO naming mismatches.
 	alias_map = {
-		"cote d ivoire": "CIV",
-		"ivory coast": "CIV",
-		"congo": "COD",
-		"democratic republic of congo": "COD",
-		"united states of america": "USA",
-		"usa": "USA",
-		"united states": "USA",
-		"south korea": "KOR",
-		"north korea": "PRK",
-		"russian federation": "RUS",
-		"viet nam": "VNM",
-		"czech republic": "CZE",
-		"brunei darussalam": "BRN",
-		"eswatini": "SWZ",
-		"cape verde": "CPV",
-		"timor leste": "TLS",
-		"bahamas": "BHS",
+		"cote d ivoire": "CI",
+		"ivory coast": "CI",
+		"congo": "CG",
+		"democratic republic of congo": "CD",
+		"united states of america": "US",
+		"usa": "US",
+		"united states": "US",
+		"south korea": "KR",
+		"north korea": "KP",
+		"russian federation": "RU",
+		"viet nam": "VN",
+		"czech republic": "CZ",
+		"brunei darussalam": "BN",
+		"eswatini": "SZ",
+		"cape verde": "CV",
+		"timor leste": "TL",
+		"bahamas": "BS",
+		"united kingdom": "GB",
+		"uk": "GB",
 	}
 	return alias_map.get(key)
 
 
-def get_country_flag_url(country_name: str) -> str | None:
-	iso3 = get_country_iso3(country_name)
-	if not iso3:
+def get_country_iso3(country_name: str) -> str | None:
+	# Kept for world map locations using ISO-3 codes.
+	# The flag URL itself uses ISO-2 and SVG assets.
+	lookup = build_country_flag_lookup()
+	# This helper is intentionally kept for map overlays; it is not used for flag URLs.
+	# The FAO profile file has ISO2_CODE and ISO3_CODE; map needs ISO3.
+	path = BASE_DIR / "FAOcountryProfile.csv"
+	if not path.exists():
 		return None
-	return f"https://raw.githubusercontent.com/ManasaSavanur/CountryFlags/master/flags/{iso3.lower()}.png"
+	country_df = pd.read_csv(path, low_memory=False)
+	country_df.columns = [str(c).strip() for c in country_df.columns]
+	country_name_norm = normalize_country_name(country_name)
+	for _, row in country_df.iterrows():
+		for col in ["SHORT_NAME", "OFFICIAL_FAO_NAME", "UNOFFICIAL1_NAME", "UNOFFICIAL2_NAME", "UNOFFICIAL3_NAME", "ISO3_CODE"]:
+			val = row.get(col)
+			if pd.isna(val) or str(val).strip() == "":
+				continue
+			if normalize_country_name(str(val)) == country_name_norm:
+				iso3 = str(row.get("ISO3_CODE", "")).strip().upper()
+				if iso3:
+					return iso3
+	return None
+
+
+def get_country_flag_url(country_name: str) -> str | None:
+	iso2 = get_country_iso2(country_name)
+	if not iso2:
+		return None
+	return f"https://github.com/ManasaSavanur/CountryFlags/blob/main/{iso2.lower()}.svg?raw=true"
 
 
 def display_df_with_headers(df: pd.DataFrame) -> pd.DataFrame:
