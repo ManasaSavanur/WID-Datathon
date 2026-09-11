@@ -577,9 +577,11 @@ def run_streamlit() -> None:
 			st.markdown(f"**🚨 Priority action:** {action_text}")
 			tier_df = tier_df.rename(columns={"country": "Country", "overlap_index": "Overlap Index"}).sort_values("Overlap Index", ascending=False).head(10)
 			tier_df["Overlap Index"] = tier_df["Overlap Index"].round(3)
-			st.bar_chart(tier_df.set_index("Country")["Overlap Index"], use_container_width=True)
-			styled_df = tier_df.style.bar(subset=["Overlap Index"], align="mid", color=["#d65f5f", "#5fba7d"])
-			st.dataframe(styled_df, use_container_width=True, hide_index=True)
+			tier_df["Data Bar"] = ''
+			max_val = max(tier_df["Overlap Index"].max(), 1.0)
+			tier_df["Data Bar"] = tier_df["Overlap Index"].apply(lambda v: "█" * int(round((float(v) / max_val) * 20)))
+			show_df = tier_df[["Country", "Overlap Index", "Data Bar"]].copy()
+			st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 	st.download_button(
 		"Download overlap results CSV",
@@ -606,7 +608,7 @@ def run_streamlit() -> None:
 		flag_url = get_country_flag_url(selected_country)
 		flag_col, text_col = st.columns([1, 5])
 		if flag_url:
-			flag_col.image(flag_url, width=60)
+			flag_col.image(flag_url, width=180)
 		text_col.markdown(f"### {selected_country}")
 		text_col.caption(f"Overlap tier: {row['overlap_tier']} | Priority action: {row['priority_action']}")
 
@@ -625,20 +627,15 @@ def run_streamlit() -> None:
 						"Export Value Index": export_index_2023 if horizon == 0 else forecast_trade_index_from_baseline(export_index_2023, horizon),
 					})
 				chart_df = pd.DataFrame(forecast_rows)
+				for col in ["Import Value Index", "Export Value Index"]:
+					chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce")
+				chart_df = chart_df.dropna(subset=["Import Value Index", "Export Value Index"]).copy()
 				chart_df = chart_df.melt(id_vars=["Year"], value_vars=["Import Value Index", "Export Value Index"], var_name="Series", value_name="Value")
-				st.markdown("### Import / Export Value Index Forecast (baseline 2014–2016 = 100)")
+				st.markdown("### Import / Export Value Index Forecast "
+                "*(baseline 2014–2016 = 100)*")
 				st.caption("Forecast method: take the 2023 FAOSTAT index as the current anchor, then apply a simple directional trend extrapolation from the baseline period (2014–2016 = 100). This is a transparent rule-based estimate, not an ML model.")
-				fig = px.line(
-					chart_df,
-					x="Year",
-					y="Value",
-					color="Series",
-					markers=True,
-					title=f"{selected_country} trade index trend and forecast",
-				)
-				fig.update_layout(legend_title_text="Series")
-				fig.update_traces(mode="lines+markers")
-				st.plotly_chart(fig, use_container_width=True)
+				line_df = chart_df.pivot(index="Year", columns="Series", values="Value").sort_index()
+				st.line_chart(line_df, use_container_width=True)
 
 				forecast_df = pd.DataFrame([
 					{"Horizon (years)": 0, "Import Value Index": import_index_2023, "Export Value Index": export_index_2023},
