@@ -315,6 +315,52 @@ def normalize_country_name(name: str) -> str:
 	return n.strip()
 
 
+def load_trade_index_snapshot(path: Path | None = None) -> pd.DataFrame:
+	if path is None:
+		path = BASE_DIR / "Trade Indices_2023.csv"
+	if not path.exists():
+		return pd.DataFrame(columns=["country", "import_value_index_2023", "export_value_index_2023"])
+
+	idx = pd.read_csv(path, low_memory=False)
+	idx.columns = [str(c).strip() for c in idx.columns]
+	idx = idx[idx["Year"].astype(str).str.strip().eq("2023")].copy() if "Year" in idx.columns else idx.copy()
+	idx["Value"] = pd.to_numeric(idx.get("Value", pd.Series([np.nan] * len(idx))), errors="coerce")
+	idx["Element"] = idx.get("Element", pd.Series([""] * len(idx))).astype(str)
+	idx["Area"] = idx.get("Area", pd.Series([""] * len(idx))).astype(str)
+	idx["Area Code (M49)"] = idx.get("Area Code (M49)", pd.Series([""] * len(idx))).astype(str)
+	idx["country"] = np.where(
+		idx["Area"].str.strip() != "",
+		idx["Area"].str.strip(),
+		idx["Area Code (M49)"].astype(str).str.strip(),
+	)
+	idx = idx[idx["Element"].str.contains("Value Index", case=False, na=False)].copy()
+	idx["index_kind"] = np.where(
+		idx["Element"].str.contains("Import", case=False, na=False),
+		"import_value_index_2023",
+		"export_value_index_2023",
+	)
+	idx = idx[~pd.isna(idx["Value"])].copy()
+	if idx.empty:
+		return pd.DataFrame(columns=["country", "import_value_index_2023", "export_value_index_2023"])
+
+	pivot = idx.groupby(["country", "index_kind"], as_index=False)["Value"].mean()
+	wide = pivot.pivot(index="country", columns="index_kind", values="Value").reset_index()
+	wide["import_value_index_2023"] = pd.to_numeric(wide.get("import_value_index_2023", pd.Series(np.nan, index=wide.index)), errors="coerce")
+	wide["export_value_index_2023"] = pd.to_numeric(wide.get("export_value_index_2023", pd.Series(np.nan, index=wide.index)), errors="coerce")
+	return wide[["country", "import_value_index_2023", "export_value_index_2023"]].copy()
+
+
+def forecast_trade_index_from_baseline(current_index: float | int | None, years_ahead: int) -> float:
+	if current_index is None or pd.isna(current_index):
+		return np.nan
+	current_index = float(current_index)
+	if current_index <= 0:
+		return np.nan
+	# Use the baseline 2014-2016 = 100 as the anchor and extrapolate using a simple CAGR-style trend.
+	baseline_growth = (current_index / 100.0) ** (1.0 / 7.0) - 1.0
+	return float(current_index * ((1.0 + baseline_growth) ** years_ahead))
+
+
 def build_country_flag_lookup() -> dict[str, str]:
 	path = BASE_DIR / "FAOcountryProfile.csv"
 	lookup: dict[str, str] = {}
@@ -562,6 +608,25 @@ def run_streamlit() -> None:
 			flag_col.image(flag_url, width=120)
 		text_col.markdown(f"### {selected_country}")
 		text_col.caption(f"Overlap tier: {row['overlap_tier']} | Priority action: {row['priority_action']}")
+
+		trade_index_df = load_trade_index_snapshot(BASE_DIR / "Trade Indices_2023.csv")
+		if not trade_index_df.empty:
+			country_index = trade_index_df[trade_index_df["country"].astype(str).str.lower().eq(selected_country.lower())]
+			if not country_index.empty:
+				country_index = country_index.iloc[0]
+				import_index_2023 = country_index.get("import_value_index_2023")
+				export_index_2023 = country_index.get("export_value_index_2023")
+				forecast_rows = []
+				for horizon in [1, 3, 5]:
+					forecast_rows.append({
+						"Horizon (years)": horizon,
+						"Import Value Index": forecast_trade_index_from_baseline(import_index_2023, horizon),
+						"Export Value Index": forecast_trade_index_from_baseline(export_index_2023, horizon),
+					})
+				forecast_df = pd.DataFrame(forecast_rows)
+				forecast_df = forecast_df.round(2)
+				st.markdown("### Import / Export Value Index Forecast (baseline 2014–2016 = 100)")
+				st.dataframe(forecast_df, use_container_width=True, hide_index=True)
 
 		try:
 			import plotly.express as px
