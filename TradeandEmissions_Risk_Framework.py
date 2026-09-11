@@ -507,14 +507,115 @@ def run_streamlit() -> None:
 	df, links = build_overlap_framework_with_details()
 	export_outputs(df)
 
-	c1, c2, c3, c4 = st.columns(4)
-	c1.metric("Countries scored", int(len(df)))
-	c2.metric("Critical overlap countries", int((df["overlap_tier"] == "Critical overlap").sum()))
-	c3.metric("Median overlap index", f"{df['overlap_index'].median():.3f}")
-	c4.metric("Avg emissions coverage", f"{df['emissions_data_coverage'].mean():.1%}")
-	st.caption(
-		"Metric definitions: Countries scored = all countries with valid risk scores; Critical overlap = countries above the 75th percentile in both vulnerability and emissions exposure; Median overlap index = central value across countries; Avg emissions coverage = share of import value matched to emissions intensity data."
+	st.markdown(
+		"""
+<style>
+    .flip-card {
+        background: transparent;
+        width: 100%;
+        min-height: 150px;
+        perspective: 1000px;
+        margin-bottom: 12px;
+    }
+    .flip-card-inner {
+        position: relative;
+        width: 100%;
+        height: 150px;
+        text-align: center;
+        transition: transform 0.7s;
+        transform-style: preserve-3d;
+        border-radius: 16px;
+    }
+    .flip-card:hover .flip-card-inner {
+        transform: rotateY(180deg);
+    }
+    .flip-card-front, .flip-card-back {
+        position: absolute;
+        inset: 0;
+        border-radius: 16px;
+        backface-visibility: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    .flip-card-front {
+        background: linear-gradient(135deg, #0e1117, #1f2937);
+        color: white;
+    }
+    .flip-card-back {
+        background: linear-gradient(135deg, #2d3748, #4a5568);
+        color: white;
+        transform: rotateY(180deg);
+    }
+    .metric-title {
+        font-size: 0.85rem;
+        opacity: 0.8;
+        margin-bottom: 8px;
+        display: block;
+    }
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        line-height: 1.1;
+    }
+    .metric-back {
+        font-size: 0.8rem;
+        line-height: 1.4;
+        text-align: center;
+        padding: 10px;
+    }
+</style>
+		""",
+		unsafe_allow_html=True,
 	)
+
+	metric_cards = [
+		{
+			"title": "Countries scored",
+			"value": int(len(df)),
+			"back": "All countries with valid risk scores in the final overlap model.",
+		},
+		{
+			"title": "Critical overlap countries",
+			"value": int((df["overlap_tier"] == "Critical overlap").sum()),
+			"back": "Countries above the 75th percentile in both vulnerability and emissions exposure.",
+		},
+		{
+			"title": "Median overlap index",
+			"value": f"{df['overlap_index'].median():.3f}",
+			"back": "Central overlap level across the full country set.",
+		},
+		{
+			"title": "Avg emissions coverage",
+			"value": f"{df['emissions_data_coverage'].mean():.1%}",
+			"back": "Share of import value matched to emissions intensity data.",
+		},
+	]
+
+	cols = st.columns(4)
+	for col, card in zip(cols, metric_cards):
+		with col:
+			st.markdown(
+				f"""
+				<div class="flip-card">
+				  <div class="flip-card-inner">
+				    <div class="flip-card-front">
+				      <div>
+				        <span class="metric-title">{card['title']}</span>
+				        <div class="metric-value">{card['value']}</div>
+				      </div>
+				    </div>
+				    <div class="flip-card-back">
+				      <div class="metric-back">{card['back']}</div>
+				    </div>
+				  </div>
+				</div>
+				""",
+				unsafe_allow_html=True,
+			)
 
 	st.subheader("Priority Ranking")
 	priority_df = df[["country", "overlap_index", "vulnerability_index", "emissions_exposure_index", "concentration_index", "priority_action"]].copy()
@@ -608,7 +709,7 @@ def run_streamlit() -> None:
 		flag_url = get_country_flag_url(selected_country)
 		flag_col, text_col = st.columns([1, 5])
 		if flag_url:
-			flag_col.image(flag_url, width=180)
+			flag_col.image(flag_url, width=210)
 		text_col.markdown(f"### {selected_country}")
 		text_col.caption(f"Overlap tier: {row['overlap_tier']} | Priority action: {row['priority_action']}")
 
@@ -633,7 +734,7 @@ def run_streamlit() -> None:
 				chart_df = chart_df.melt(id_vars=["Year"], value_vars=["Import Value Index", "Export Value Index"], var_name="Series", value_name="Value")
 				st.markdown("### Import / Export Value Index Forecast "
                 "*(baseline 2014–2016 = 100)*")
-				st.caption("Forecast method: take the 2023 FAOSTAT index as the current anchor, then apply a simple directional trend extrapolation from the baseline period (2014–2016 = 100). This is a transparent rule-based estimate, not an ML model.")
+				st.caption("Forecast method: 2023 FAOSTAT index is the current anchor, then apply a simple directional trend extrapolation from the baseline period (2014–2016 = 100). This is a transparent rule-based estimate.")
 				line_df = chart_df.pivot(index="Year", columns="Series", values="Value").sort_index()
 				st.line_chart(line_df, use_container_width=True)
 
