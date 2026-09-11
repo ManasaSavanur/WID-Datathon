@@ -301,6 +301,61 @@ def export_outputs(df: pd.DataFrame) -> None:
 	out[["m49", "country", "overlap_tier", "priority_action", "overlap_index"]].to_csv(OUT_ACTIONS, index=False)
 
 
+def build_country_flag_lookup() -> dict[str, str]:
+	path = BASE_DIR / "FAOcountryProfile.csv"
+	lookup: dict[str, str] = {}
+	if not path.exists():
+		return lookup
+	country_df = pd.read_csv(path, low_memory=False)
+	country_df.columns = [str(c).strip() for c in country_df.columns]
+	for _, row in country_df.iterrows():
+		for col in ["ISO3_CODE", "ISO3_WB_CODE", "SHORT_NAME", "OFFICIAL_FAO_NAME", "UNOFFICIAL1_NAME", "UNOFFICIAL2_NAME", "UNOFFICIAL3_NAME"]:
+			val = row.get(col)
+			if pd.isna(val) or str(val).strip() == "":
+				continue
+			name = str(val).strip()
+			lookup.setdefault(name.lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+			lookup.setdefault(str(row.get("SHORT_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+			lookup.setdefault(str(row.get("OFFICIAL_FAO_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+			lookup.setdefault(str(row.get("UNOFFICIAL1_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+			lookup.setdefault(str(row.get("UNOFFICIAL2_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+			lookup.setdefault(str(row.get("UNOFFICIAL3_NAME", "")).strip().lower(), str(row.get("ISO3_CODE", "")).strip().upper())
+	return {k: v for k, v in lookup.items() if v}
+
+
+def get_country_flag_url(country_name: str) -> str | None:
+	lookup = build_country_flag_lookup()
+	key = str(country_name or "").strip().lower()
+	iso3 = lookup.get(key)
+	if not iso3:
+		return None
+	return f"https://raw.githubusercontent.com/ManasaSavanur/CountryFlags/master/flags/{iso3.lower()}.png"
+
+
+def display_df_with_headers(df: pd.DataFrame) -> pd.DataFrame:
+	return df.rename(columns={
+		"country": "Country",
+		"overlap_index": "Overlap Index",
+		"vulnerability_index": "Vulnerability Index",
+		"emissions_exposure_index": "Emissions Exposure",
+		"concentration_index": "Concentration Index",
+		"trade_weighted_emissions_intensity": "Trade-weighted Emissions Intensity",
+		"high_emissions_import_share": "High-Emission Import Share",
+		"emissions_data_coverage": "Emissions Data Coverage",
+		"overlap_tier": "Overlap Tier",
+		"priority_action": "Priority Action",
+		"partner_country": "Partner Country",
+		"import_value": "Import Value",
+		"import_share": "Import Share",
+		"avg_emissions_intensity": "Average Emissions Intensity",
+		"risk_contribution": "Risk Contribution",
+		"resolved_item_name": "Food Item",
+		"trade_item_name": "Food Item",
+		"partner_m49": "Partner M49",
+		"item_cpc": "Item CPC",
+	})
+
+
 def run_cli() -> None:
 	df = build_overlap_framework()
 	export_outputs(df)
@@ -344,34 +399,30 @@ def run_streamlit() -> None:
 	c4.metric("Avg emissions coverage", f"{df['emissions_data_coverage'].mean():.1%}")
 
 	st.subheader("Priority Ranking")
-	st.dataframe(
-		df[
-			[
-				"country",
-				"m49",
-				"overlap_index",
-				"overlap_tier",
-				"vulnerability_index",
-				"emissions_exposure_index",
-				"concentration_index",
-				"priority_action",
-			]
-		],
-		use_container_width=True,
-	)
+	priority_df = df[["country", "overlap_index", "overlap_tier", "vulnerability_index", "emissions_exposure_index", "concentration_index", "priority_action"]].copy()
+	priority_df.insert(0, "Priority Rank", np.arange(1, len(priority_df) + 1))
+	priority_df = display_df_with_headers(priority_df)
+	priority_df = priority_df.rename(columns={"Priority Rank": "Rank"})
+	st.dataframe(priority_df, use_container_width=True, hide_index=True)
 
 	st.subheader("Overlap Map")
 	scatter_df = df[["country", "vulnerability_index", "emissions_exposure_index", "overlap_tier"]].copy()
 	st.scatter_chart(scatter_df, x="vulnerability_index", y="emissions_exposure_index", color="overlap_tier")
 
 	st.subheader("Action Playbook")
-	for tier in ["Critical overlap", "High vulnerability", "High emissions", "Moderate/Low"]:
-		st.markdown(f"### {tier}")
-		s = df[df["overlap_tier"] == tier][["country", "priority_action", "overlap_index"]].head(10)
-		if len(s) == 0:
-			st.write("No countries in this tier.")
-		else:
-			st.table(s)
+	tiers = ["Critical overlap", "High vulnerability", "High emissions", "Moderate/Low"]
+	tabs = st.tabs(tiers)
+	for tab, tier in zip(tabs, tiers):
+		with tab:
+			s = df[df["overlap_tier"] == tier][["country", "priority_action", "overlap_index"]].head(10).copy()
+			if len(s) == 0:
+				st.write("No countries in this tier.")
+			else:
+				playbook_df = display_df_with_headers(s)
+				st.dataframe(playbook_df, use_container_width=True, hide_index=True)
+				if len(playbook_df) > 0:
+					bar_df = playbook_df.set_index("Country")[["Overlap Index"]].sort_values("Overlap Index", ascending=False)
+					st.bar_chart(bar_df)
 
 	st.download_button(
 		"Download overlap results CSV",
@@ -395,6 +446,13 @@ def run_streamlit() -> None:
 			st.warning("No link-level trade records found for the selected country.")
 			return
 
+		flag_url = get_country_flag_url(selected_country)
+		flag_col, text_col = st.columns([1, 5])
+		if flag_url:
+			flag_col.image(flag_url, width=80)
+		text_col.markdown(f"### {selected_country}")
+		text_col.caption(f"Overlap tier: {row['overlap_tier']} | Priority action: {row['priority_action']}")
+
 		sub["emissions_intensity_filled"] = sub["emissions_intensity"].fillna(sub["emissions_intensity"].median(skipna=True))
 		sub["weighted_emissions"] = sub["import_value"] * sub["emissions_intensity_filled"]
 		den = sub["weighted_emissions"].max() if sub["weighted_emissions"].max() > 0 else 1.0
@@ -413,50 +471,65 @@ def run_streamlit() -> None:
 			sub.groupby(["partner_m49", "partner_country"], as_index=False)
 			.agg(import_value=("import_value", "sum"), weighted_emissions=("weighted_emissions", "sum"))
 		)
-		partner_tbl["import_share"] = np.where(total_import > 0, partner_tbl["import_value"] / total_import, 0.0)
-		partner_tbl["avg_emissions_intensity"] = np.where(
+		partner_tbl["Import Share"] = np.where(total_import > 0, partner_tbl["import_value"] / total_import, 0.0)
+		partner_tbl["Average Emissions Intensity"] = np.where(
 			partner_tbl["import_value"] > 0,
 			partner_tbl["weighted_emissions"] / partner_tbl["import_value"],
 			0.0,
 		)
-		partner_tbl["risk_contribution"] = np.where(
+		partner_tbl["Risk Contribution"] = np.where(
 			total_weighted > 0,
 			partner_tbl["weighted_emissions"] / total_weighted,
 			0.0,
 		)
-		partner_tbl = partner_tbl.sort_values("risk_contribution", ascending=False)
+		partner_tbl = partner_tbl.sort_values("Risk Contribution", ascending=False)
+		partner_tbl = partner_tbl[["partner_country", "import_value", "Import Share", "Average Emissions Intensity", "Risk Contribution"]].head(10).copy()
+		partner_tbl = display_df_with_headers(partner_tbl)
 
 		item_tbl = (
 			sub.groupby(["item_cpc", "resolved_item_name"], as_index=False)
 			.agg(import_value=("import_value", "sum"), weighted_emissions=("weighted_emissions", "sum"))
 		)
-		item_tbl["import_share"] = np.where(total_import > 0, item_tbl["import_value"] / total_import, 0.0)
-		item_tbl["avg_emissions_intensity"] = np.where(
+		item_tbl["Import Share"] = np.where(total_import > 0, item_tbl["import_value"] / total_import, 0.0)
+		item_tbl["Average Emissions Intensity"] = np.where(
 			item_tbl["import_value"] > 0,
 			item_tbl["weighted_emissions"] / item_tbl["import_value"],
 			0.0,
 		)
-		item_tbl["risk_contribution"] = np.where(
+		item_tbl["Risk Contribution"] = np.where(
 			total_weighted > 0,
 			item_tbl["weighted_emissions"] / total_weighted,
 			0.0,
 		)
-		item_tbl = item_tbl.sort_values("risk_contribution", ascending=False)
+		item_tbl = item_tbl.sort_values("Risk Contribution", ascending=False)
+		item_tbl = item_tbl[["resolved_item_name", "import_value", "Import Share", "Average Emissions Intensity", "Risk Contribution"]].head(10).copy()
+		item_tbl = display_df_with_headers(item_tbl)
 
-		st.markdown("### Top Risky Partner Countries")
-		st.dataframe(
-			partner_tbl[["partner_country", "partner_m49", "import_value", "import_share", "avg_emissions_intensity", "risk_contribution"]].head(20),
-			use_container_width=True,
-		)
+		partner_chart = partner_tbl.set_index("Partner Country")[["Import Share", "Average Emissions Intensity"]].copy()
+		item_chart = item_tbl.set_index("Food Item")[["Import Share", "Average Emissions Intensity"]].copy()
 
-		st.markdown("### Top Risky Food Items")
-		st.dataframe(
-			item_tbl[["resolved_item_name", "item_cpc", "import_value", "import_share", "avg_emissions_intensity", "risk_contribution"]].head(20),
-			use_container_width=True,
-		)
+		partner_col, item_col = st.columns(2)
+		with partner_col:
+			st.markdown("### Top Risky Partner Countries")
+			st.dataframe(partner_tbl, use_container_width=True, hide_index=True)
+			st.bar_chart(partner_chart)
+		with item_col:
+			st.markdown("### Top Risky Food Items")
+			st.dataframe(item_tbl, use_container_width=True, hide_index=True)
+			st.bar_chart(item_chart)
+
+		fig, ax = __import__('matplotlib').pyplot.subplots(figsize=(4, 4))
+		pie_df = item_tbl.head(5).copy()
+		if len(pie_df) > 0:
+			labels = pie_df["Food Item"].astype(str)
+			values = pie_df["Import Share"].astype(float)
+			ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
+			ax.set_title("Top item contribution")
+			st.pyplot(fig)
+			__import__('matplotlib').pyplot.close(fig)
 
 		st.markdown("### What-If: Supplier Disruption Simulation")
-		partner_options = partner_tbl["partner_country"].fillna("Unknown").astype(str).tolist()
+		partner_options = partner_tbl["Partner Country"].fillna("Unknown").astype(str).tolist()
 		default_partner = partner_options[0] if partner_options else None
 		shock_partner = st.selectbox("Supplier to disrupt", partner_options, index=0) if default_partner else None
 		shock_pct = st.slider("Disruption severity (%)", min_value=5, max_value=100, value=30, step=5)
@@ -468,8 +541,6 @@ def run_streamlit() -> None:
 
 			shock = sub.copy()
 			mask = shock["partner_country"].fillna("Unknown").astype(str).eq(shock_partner)
-
-			# Use float-safe vectorized assignment to avoid dtype upcast errors on some pandas builds.
 			shock_import = pd.to_numeric(shock["import_value"], errors="coerce").fillna(0.0).astype(float)
 			shock_emissions = pd.to_numeric(shock["weighted_emissions"], errors="coerce").fillna(0.0).astype(float)
 			multiplier = np.where(mask.to_numpy(), 1.0 - loss_factor, 1.0)
@@ -484,7 +555,7 @@ def run_streamlit() -> None:
 			m1, m2, m3 = st.columns(3)
 			m1.metric("Import value shock", f"{import_loss_pct:.1%}")
 			m2.metric("Embodied emissions change", f"{emissions_change_pct:.1%}")
-			m3.metric("Partner share (pre-shock)", f"{partner_tbl.loc[partner_tbl['partner_country']==shock_partner, 'import_share'].sum():.1%}")
+			m3.metric("Partner share (pre-shock)", f"{partner_tbl.loc[partner_tbl['Partner Country'].eq(shock_partner), 'Import Share'].sum():.1%}")
 
 			st.info(
 				"Priority response: replace disrupted flows with lower-emissions suppliers first for high-risk items, "
